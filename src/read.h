@@ -18,6 +18,13 @@
 
 #define MOBI_EXTH_MAXCNT 1024
 
+typedef struct MEMORY_FILE
+{
+    unsigned char* file_buffer;
+    long file_length;
+    long current_file_position;
+} MEMORY_FILE;
+
 MOBI_RET mobi_parse_fdst(const MOBIData *m, MOBIRawml *rawml);
 MOBI_RET mobi_parse_huffdic(const MOBIData *m, MOBIHuffCdic *cdic);
 MOBI_RET mobi_load_pdbheader(MOBIData *m, FILE *file);

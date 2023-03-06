@@ -3,3 +3,22 @@
 ################################################################################
 
 /mobiconvert/x64
+/.vs/libmobi/v17
+/mobiconvertnettest/bin/Debug/net6.0
+/mobiconvertnettest/obj/Debug/net6.0
+/mobiconvertnettest/obj/Release/net6.0
+/mobiconvertnettest/obj
+/mobiconverttest/x64
+/msvc/mobitool/x64
+/msvc/mobimeta/x64
+/msvc/mobitool/mobitool.vcxproj.user
+/msvc/mobimeta/mobimeta.vcxproj.user
+/msvc/mobidrm/x64
+/msvc/mobidrm/mobidrm.vcxproj.user
+/mobiconverttest/mobiconverttest.vcxproj.user
+/msvc/.vs
+/msvc/x64
+/mobiconvert/mobiconvert.vcxproj.user
+*.epub
+/msvc/packages
+/msvc/libmobi.vcxproj.user

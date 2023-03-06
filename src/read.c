@@ -18,6 +18,54 @@
 #include "index.h"
 #include "debug.h"
 
+
+size_t mread(void* buffer, int block_size, long length, MEMORY_FILE* file)
+{
+    long size = length;
+    if (size + file->current_file_position > file->file_length)
+    {
+        size = file->file_length - file->current_file_position;
+    }
+    memcpy(buffer, &file->file_buffer[file->current_file_position], size);
+    file->current_file_position += size;
+    return size;
+}
+
+int mseek(MEMORY_FILE* _Stream, long _Offset, int _Origin)
+{
+    if (_Origin == SEEK_SET)
+    {
+        if ((_Offset >= 0) && (_Offset <= _Stream->file_length))
+        {
+            _Stream->current_file_position = _Offset;
+            return 0;
+        }
+    }
+    else if (_Origin == SEEK_CUR)
+    {
+        if ((_Offset+_Stream->current_file_position >= 0) && (_Offset + _Stream->current_file_position <= _Stream->file_length))
+        {
+            _Stream->current_file_position = _Offset+_Stream->current_file_position;
+            return 0;
+        }
+    }
+    else if (_Origin == SEEK_END)
+    {
+        if ((_Offset >= 0) && (_Offset <= _Stream->file_length))
+        {
+            _Stream->current_file_position = +_Stream->file_length - _Offset;
+            return 0;
+        }
+    }
+    return 1;
+}
+
+long mtell(MEMORY_FILE* _Stream)
+{
+    return _Stream->current_file_position;
+}
+
+
 /**
  @brief Read palm database header from file into MOBIData structure (MOBIPdbHeader)
  
@@ -67,6 +115,58 @@ MOBI_RET mobi_load_pdbheader(MOBIData *m, FILE *file) {
     mobi_buffer_free(buf);
     return MOBI_SUCCESS;
 }
+
+/**
+ @brief Read palm database header from file into MOBIData structure (MOBIPdbHeader)
+
+ @param[in,out] m MOBIData structure to be filled with read data
+ @param[in] file Filedescriptor to read from
+ @return MOBI_RET status code (on success MOBI_SUCCESS)
+ */
+MOBI_RET mobi_load_pdbheader_memory(MOBIData* m, MEMORY_FILE* file) {
+    if (m == NULL) {
+        debug_print("%s", "Mobi structure not initialized\n");
+        return MOBI_INIT_FAILED;
+    }
+    if (!file) {
+        return MOBI_FILE_NOT_FOUND;
+    }
+    MOBIBuffer* buf = mobi_buffer_init(PALMDB_HEADER_LEN);
+    if (buf == NULL) {
+        debug_print("%s\n", "Memory allocation failed");
+        return MOBI_MALLOC_FAILED;
+    }
+    const size_t len = mread(buf->data, 1, PALMDB_HEADER_LEN, file);
+    if (len != PALMDB_HEADER_LEN) {
+        mobi_buffer_free(buf);
+        return MOBI_DATA_CORRUPT;
+    }
+    m->ph = calloc(1, sizeof(MOBIPdbHeader));
+    if (m->ph == NULL) {
+        debug_print("%s", "Memory allocation for pdb header failed\n");
+        mobi_buffer_free(buf);
+        return MOBI_MALLOC_FAILED;
+    }
+    /* parse header */
+    mobi_buffer_getstring(m->ph->name, buf, PALMDB_NAME_SIZE_MAX);
+    m->ph->attributes = mobi_buffer_get16(buf);
+    m->ph->version = mobi_buffer_get16(buf);
+    m->ph->ctime = mobi_buffer_get32(buf);
+    m->ph->mtime = mobi_buffer_get32(buf);
+    m->ph->btime = mobi_buffer_get32(buf);
+    m->ph->mod_num = mobi_buffer_get32(buf);
+    m->ph->appinfo_offset = mobi_buffer_get32(buf);
+    m->ph->sortinfo_offset = mobi_buffer_get32(buf);
+    mobi_buffer_getstring(m->ph->type, buf, 4);
+    mobi_buffer_getstring(m->ph->creator, buf, 4);
+    m->ph->uid = mobi_buffer_get32(buf);
+    m->ph->next_rec = mobi_buffer_get32(buf);
+    m->ph->rec_count = mobi_buffer_get16(buf);
+    mobi_buffer_free(buf);
+    return MOBI_SUCCESS;
+}
+
+
 
 /**
  @brief Read list of database records from file into MOBIData structure (MOBIPdbRecord)
@@ -121,6 +221,61 @@ MOBI_RET mobi_load_reclist(MOBIData *m, FILE *file) {
     return MOBI_SUCCESS;
 }
 
+
+/**
+ @brief Read list of database records from file into MOBIData structure (MOBIPdbRecord)
+
+ @param[in,out] m MOBIData structure to be filled with read data
+ @param[in] file Filedescriptor to read from
+ @return MOBI_RET status code (on success MOBI_SUCCESS)
+ */
+MOBI_RET mobi_load_reclist_memory(MOBIData* m, MEMORY_FILE* file) {
+    if (m == NULL) {
+        debug_print("%s", "Mobi structure not initialized\n");
+        return MOBI_INIT_FAILED;
+    }
+    if (!file) {
+        debug_print("%s", "File not ready\n");
+        return MOBI_FILE_NOT_FOUND;
+    }
+    m->rec = calloc(1, sizeof(MOBIPdbRecord));
+    if (m->rec == NULL) {
+        debug_print("%s", "Memory allocation for pdb record failed\n");
+        return MOBI_MALLOC_FAILED;
+    }
+    MOBIPdbRecord* curr = m->rec;
+    for (int i = 0; i < m->ph->rec_count; i++) {
+        MOBIBuffer* buf = mobi_buffer_init(PALMDB_RECORD_INFO_SIZE);
+        if (buf == NULL) {
+            debug_print("%s\n", "Memory allocation failed");
+            return MOBI_MALLOC_FAILED;
+        }
+        const size_t len = mread(buf->data, 1, PALMDB_RECORD_INFO_SIZE, file);
+        if (len != PALMDB_RECORD_INFO_SIZE) {
+            mobi_buffer_free(buf);
+            return MOBI_DATA_CORRUPT;
+        }
+        if (i > 0) {
+            curr->next = calloc(1, sizeof(MOBIPdbRecord));
+            if (curr->next == NULL) {
+                debug_print("%s", "Memory allocation for pdb record failed\n");
+                mobi_buffer_free(buf);
+                return MOBI_MALLOC_FAILED;
+            }
+            curr = curr->next;
+        }
+        curr->offset = mobi_buffer_get32(buf);
+        curr->attributes = mobi_buffer_get8(buf);
+        const uint8_t h = mobi_buffer_get8(buf);
+        const uint16_t l = mobi_buffer_get16(buf);
+        curr->uid = (uint32_t)h << 16 | l;
+        curr->next = NULL;
+        mobi_buffer_free(buf);
+    }
+    return MOBI_SUCCESS;
+}
+
+
 /**
  @brief Read record data and size from file into MOBIData structure (MOBIPdbRecord)
  
@@ -164,6 +319,51 @@ MOBI_RET mobi_load_rec(MOBIData *m, FILE *file) {
     return MOBI_SUCCESS;
 }
 
+
+/**
+ @brief Read record data and size from file into MOBIData structure (MOBIPdbRecord)
+
+ @param[in,out] m MOBIData structure to be filled with read data
+ @param[in] file Filedescriptor to read from
+ @return MOBI_RET status code (on success MOBI_SUCCESS)
+ */
+MOBI_RET mobi_load_rec_memory(MOBIData* m, MEMORY_FILE* file) {
+    MOBI_RET ret;
+    if (m == NULL) {
+        debug_print("%s", "Mobi structure not initialized\n");
+        return MOBI_INIT_FAILED;
+    }
+    MOBIPdbRecord* curr = m->rec;
+    while (curr != NULL) {
+        MOBIPdbRecord* next;
+        size_t size;
+        if (curr->next != NULL) {
+            next = curr->next;
+            size = next->offset - curr->offset;
+        }
+        else {
+            mseek(file, 0, SEEK_END);
+            long diff = mtell(file) - curr->offset;
+            if (diff <= 0) {
+                debug_print("Wrong record size: %li\n", diff);
+                return MOBI_DATA_CORRUPT;
+            }
+            size = (size_t)diff;
+            next = NULL;
+        }
+
+        curr->size = size;
+        ret = mobi_load_recdata_memory(curr, file);
+        if (ret != MOBI_SUCCESS) {
+            debug_print("Error loading record uid %i data\n", curr->uid);
+            mobi_free_rec(m);
+            return ret;
+        }
+        curr = next;
+    }
+    return MOBI_SUCCESS;
+}
+
 /**
  @brief Read record data from file into MOBIPdbRecord structure
  
@@ -183,6 +383,33 @@ MOBI_RET mobi_load_recdata(MOBIPdbRecord *rec, FILE *file) {
         return MOBI_MALLOC_FAILED;
     }
     const size_t len = fread(rec->data, 1, rec->size, file);
+    if (len < rec->size) {
+        debug_print("Truncated data in record %i\n", rec->uid);
+        return MOBI_DATA_CORRUPT;
+    }
+    return MOBI_SUCCESS;
+}
+
+
+/**
+ @brief Read record data from file into MOBIPdbRecord structure
+
+ @param[in,out] rec MOBIPdbRecord structure to be filled with read data
+ @param[in] file Filedescriptor to read from
+ @return MOBI_RET status code (on success MOBI_SUCCESS)
+ */
+MOBI_RET mobi_load_recdata_memory(MOBIPdbRecord* rec, MEMORY_FILE* file) {
+    const int ret = mseek(file, rec->offset, SEEK_SET);
+    if (ret != 0) {
+        debug_print("Record %i not found\n", rec->uid);
+        return MOBI_DATA_CORRUPT;
+    }
+    rec->data = malloc(rec->size);
+    if (rec->data == NULL) {
+        debug_print("%s", "Memory allocation for pdb record data failed\n");
+        return MOBI_MALLOC_FAILED;
+    }
+    const size_t len = mread(rec->data, 1, rec->size, file);
     if (len < rec->size) {
         debug_print("Truncated data in record %i\n", rec->uid);
         return MOBI_DATA_CORRUPT;
@@ -904,6 +1131,78 @@ MOBI_RET mobi_load_file(MOBIData *m, FILE *file) {
     }
     return MOBI_SUCCESS;
 }
+
+
+/**
+ @brief Read MOBI document from file into MOBIData structure
+
+ @param[in,out] m MOBIData structure to be filled with read data
+ @param[in] file File descriptor to read from
+ @return MOBI_RET status code (on success MOBI_SUCCESS)
+ */
+MOBI_RET mobi_load_file_memory(MOBIData* m, MEMORY_FILE* file) {
+    MOBI_RET ret;
+    if (m == NULL) {
+        debug_print("%s", "Mobi structure not initialized\n");
+        return MOBI_INIT_FAILED;
+    }
+    ret = mobi_load_pdbheader_memory(m, file);
+    if (ret != MOBI_SUCCESS) {
+        return ret;
+    }
+    if (strcmp(m->ph->type, "BOOK") != 0 && strcmp(m->ph->type, "TEXt") != 0) {
+        debug_print("Unsupported file type: %s\n", m->ph->type);
+        return MOBI_FILE_UNSUPPORTED;
+    }
+    if (m->ph->rec_count == 0) {
+        debug_print("%s", "No records found\n");
+        return MOBI_DATA_CORRUPT;
+    }
+    ret = mobi_load_reclist_memory(m, file);
+    if (ret != MOBI_SUCCESS) {
+        return ret;
+    }
+    ret = mobi_load_rec_memory(m, file);
+    if (ret != MOBI_SUCCESS) {
+        return ret;
+    }
+    ret = mobi_parse_record0(m, 0);
+    if (ret != MOBI_SUCCESS) {
+        return ret;
+    }
+    if (m->rh && m->rh->encryption_type == MOBI_ENCRYPTION_V1) {
+        /* try to set key for encryption type 1 */
+        debug_print("Trying to set key for encryption type 1%s", "\n");
+        mobi_drm_setkey(m, NULL);
+    }
+    /* if EXTH is loaded parse KF8 record0 for hybrid KF7/KF8 file */
+    if (m->eh) {
+        const size_t boundary_rec_number = mobi_get_kf8boundary_seqnumber(m);
+        if (boundary_rec_number != MOBI_NOTSET && boundary_rec_number < UINT32_MAX) {
+            /* it is a hybrid KF7/KF8 file */
+            m->kf8_boundary_offset = (uint32_t)boundary_rec_number;
+            m->next = mobi_init();
+            /* link pdb header and records data to KF8data structure */
+            m->next->ph = m->ph;
+            m->next->rec = m->rec;
+            m->next->drm_key = m->drm_key;
+            m->next->internals = m->internals;
+            /* close next loop */
+            m->next->next = m;
+            ret = mobi_parse_record0(m->next, boundary_rec_number + 1);
+            if (ret != MOBI_SUCCESS) {
+                return ret;
+            }
+            /* swap to kf8 part if use_kf8 flag is set */
+            if (m->use_kf8) {
+                mobi_swap_mobidata(m);
+            }
+        }
+    }
+    return MOBI_SUCCESS;
+}
+
+
 
 /**
  @brief Read MOBI document from a path into MOBIData structure
